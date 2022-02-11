@@ -20,13 +20,44 @@
 #   main function for instant detection.
 
 
+import fnmatch
+import shutil
 import sys
-from _settings import *
-import litedextree
-import dex_parser
+import tempfile
+from ._settings import *
+from . import litedextree
+from . import dex_parser
 import hashlib
 import zipfile
 import json
+
+
+def is_dex(filepath) -> bool:
+    if os.path.isdir(filepath):
+        return False
+
+    # read first 3 bytes to check for dex header
+    with open(filepath, 'rb') as f:
+        header_maybe = f.readline(3)
+        if header_maybe == b'dex':
+            return True
+        else:
+            return False
+
+def is_zip(filepath) -> bool:
+    try:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with zipfile.ZipFile(filepath, 'r') as zf:
+                zf.extractall(temp_dir)
+
+            return True
+
+    except zipfile.BadZipFile as bzf_e:
+        # not a zip
+        return False
+    except RecursionError as re:
+        # something weird hapened 
+        return False
 
 
 class LibRadarLite(object):
@@ -34,7 +65,7 @@ class LibRadarLite(object):
     LibRadar
     """
 
-    def __init__(self, apk_path):
+    def __init__(self, apk_path, out_root):
         """
         Init LibRadar instance with apk_path as a basestring.
         Create a Tree for every LibRadar instance. The tree describe 
@@ -42,6 +73,7 @@ class LibRadarLite(object):
         :param apk_path: basestring
         """
         self.apk_path = apk_path
+        self.out_root = out_root
         self.tree = litedextree.Tree()
 
         # A list with the .dex file names contained in the apk, for multidex support.
@@ -82,35 +114,74 @@ class LibRadarLite(object):
 
     def unzip(self):
         # If it is a valid file
-        if not os.path.isfile(self.apk_path):
-            logger.error("%s is not a valid file." % self.apk_path)
-            raise AssertionError
+        # Always get a folder
+        assert os.path.isdir(self.apk_path)
+        # if not os.path.isfile(self.apk_path):
+        #     logger.error("%s is not a valid file." % self.apk_path)
+        #     raise AssertionError
         # If it is a apk file
-        if len(self.apk_path) <= 4 or self.apk_path[-4:] != ".apk":
-            logger.error("%s is not a apk file.")
-            raise AssertionError
+        # if len(self.apk_path) <= 4 or self.apk_path[-4:] != ".apk":
+        #     logger.error("%s is not a apk file.")
+        #     raise AssertionError
         # Get SHA256
-        self.hex_sha256 = self.get_sha256()
+        # self.hex_sha256 = self.get_sha256()
+        self.hex_sha256 = self.apk_path.split('/')[-1]
         # Unzip
-        zf = zipfile.ZipFile(self.apk_path, mode='r')
+        # zf = zipfile.ZipFile(self.apk_path, mode='r')
 
         # Save all the .dex files contained in the apk into the Decompiled directory and save
         # the .dex file names into the dex_names array.
         try:
-            self.dex_names.append(zf.extract("classes.dex", SCRIPT_PATH + "/Data/Decompiled/%s" % self.hex_sha256))
+            # self.dex_names.append(zf.extract("classes.dex", self.out_root + "/Data/Decompiled/%s" % self.hex_sha256))
 
-            # Enable multidex support. If this apk has only a .dex file, then the dex_names array
-            # will contain a single element.
-            basename = "classes%d.dex"
+            # # Enable multidex support. If this apk has only a .dex file, then the dex_names array
+            # # will contain a single element.
+            # basename = "classes%d.dex"
 
-            # Little hack to let Python2 work without much trouble
-            try:
-                x_range = xrange(2, sys.maxint)
-            except Exception:
-                x_range = range(2, sys.maxsize)
+            # # Little hack to let Python2 work without much trouble
+            # try:
+            #     x_range = xrange(2, sys.maxint)
+            # except Exception:
+            #     x_range = range(2, sys.maxsize)
 
-            for i in x_range:
-                self.dex_names.append(zf.extract(basename % i, SCRIPT_PATH + "/Data/Decompiled/%s" % self.hex_sha256))
+            # for i in x_range:
+            #     self.dex_names.append(zf.extract(basename % i, self.out_root + "/Data/Decompiled/%s" % self.hex_sha256))
+
+            out_dir = self.out_root + "/Data/Decompiled/%s" % self.hex_sha256
+            filenames = os.listdir(self.apk_path)
+
+            if not os.path.exists(out_dir):
+                os.makedirs(out_dir)
+
+            if len(filenames) == 1:
+                dex_file = os.path.join(self.apk_path, filenames[0])
+
+                if is_zip(dex_file):
+                    raise NotImplementedError("Only file was ZIP format.")
+
+                if not is_dex(dex_file):
+                    raise NotImplementedError("Only file was not DEX format.")
+
+                to_dex_file = out_dir + 'classes.dex'
+
+                shutil.copy2(dex_file, to_dex_file)
+                self.dex_names.append(to_dex_file)
+            else:
+                # find dex
+                dex_files = fnmatch.filter(filenames, '*.dex')
+
+                for i, df in enumerate(sorted(dex_files)):
+                    from_dex_file = os.path.join(self.apk_path, df)
+                    if df != 'classes.dex':
+                        df = f"classes{i}.dex"
+
+                    to_dex_file = os.path.join(out_dir, df)
+                    shutil.copy2(from_dex_file, to_dex_file)
+                    self.dex_names.append(to_dex_file)
+
+                if len(dex_files) == 0:
+                    # TODO: check each file for dex
+                    raise NotImplementedError("Folder did not have *.dex")
 
         except KeyError:
             pass

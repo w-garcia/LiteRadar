@@ -20,7 +20,7 @@
 #   This script is used to implement the tree node and tree structure.
 
 
-from _settings import *
+from ._settings import *
 import hashlib
 import csv
 
